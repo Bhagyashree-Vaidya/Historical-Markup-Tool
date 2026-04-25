@@ -133,7 +133,7 @@ The **Emma B. Andrews Diary Project** is part of the University of Washington's 
 ## Contributors
 
 - **Prof. Sarah Ketchley** — Project lead, University of Washington
-- **Bhagyashree Vaidya** — Development, University of Washington (ECE / FunLab)
+- **Bhagyashree Vaidya** — Development, University of Washington (iSchool, MSIM)
 
 ---
 

@@ -15,11 +15,9 @@ from vertexai.generative_models import GenerativeModel, Part, GenerationConfig
 GCP_PROJECT  = os.environ.get("GCP_PROJECT",  "historical-markup-tool-v2")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
 
-# Model preference order — first available model wins
-# gemini-2.5-pro-preview-05-06 is best but requires project allowlist;
-# gemini-1.5-pro-002 is GA everywhere and excellent for handwriting
+# gemini-1.5-pro-002 is GA on all projects — excellent for complex handwriting.
+# gemini-2.0-flash-001 is the fast fallback.
 GEMINI_MODELS = [
-    "gemini-2.5-pro-preview-05-06",
     "gemini-1.5-pro-002",
     "gemini-2.0-flash-001",
 ]

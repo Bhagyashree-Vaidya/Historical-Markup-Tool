@@ -1,29 +1,18 @@
-"""OCR service — Gemini 2.5 Pro via Google Cloud Vertex AI.
+"""OCR service — Claude claude-sonnet-4-5 via Anthropic API.
 
-Uses Application Default Credentials (no API key required in code).
-On Cloud Run the service account is granted Vertex AI User automatically.
-Locally: run  gcloud auth application-default login  once.
+Requires ANTHROPIC_API_KEY environment variable.
+Set it in Cloud Run env vars (or locally in your shell).
 """
 import os
 import io
+import base64
 from PIL import Image
+import anthropic
 
-import vertexai
-from vertexai.generative_models import GenerativeModel, Part, GenerationConfig
-
-# ── Project config ─────────────────────────────────────────────────────────
-GCP_PROJECT  = os.environ.get("GCP_PROJECT",  "historical-markup-tool-v2")
-GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
-
-# gemini-1.5-pro-002 is GA on all projects — excellent for complex handwriting.
-# gemini-2.0-flash-001 is the fast fallback.
-GEMINI_MODELS = [
-    "gemini-1.5-pro-002",
-    "gemini-2.0-flash-001",
-]
-
-# Initialise once at import time
-vertexai.init(project=GCP_PROJECT, location=GCP_LOCATION)
+# ── Config ─────────────────────────────────────────────────────────────────
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# claude-sonnet-4-5: best vision model — excellent for historical handwriting
+CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 
 # ── Transcription prompt ───────────────────────────────────────────────────
 TRANSCRIPTION_PROMPT = """You are an expert paleographer specialising in late Victorian \
@@ -52,8 +41,8 @@ TRANSCRIPTION RULES:
     approximate position
 
 CONTEXT CLUES for this collection:
-- Common proper names: Emma, John (her companion), Khnoumit (Egyptian crew), \
-  Luxor, Aswan, Cairo, Nile, dahabiyeh (Nile houseboat)
+- Common proper names: Emma, John (her companion), Luxor, Aswan, Cairo, Nile, \
+  dahabiyeh (Nile houseboat)
 - Common topics: weather, health, visitors, excavations, social calls, \
   shopping in bazaars, temple visits
 - Dates written as: "Jan. 3rd", "Thursday", "March 15, 1900"
@@ -61,53 +50,30 @@ CONTEXT CLUES for this collection:
 Begin the transcription now — output the raw transcription only:"""
 
 
-def _detect_mime(image_bytes: bytes) -> str:
-    """Return MIME type by inspecting the image with Pillow."""
+def _preprocess_image(image_bytes: bytes) -> tuple[bytes, str]:
+    """Enhance image and return (bytes, media_type).
+    Upsamples small images and converts to JPEG for consistency.
+    """
     try:
         img = Image.open(io.BytesIO(image_bytes))
-        fmt = (img.format or "").lower()
-        return {
-            "jpeg": "image/jpeg",
-            "jpg":  "image/jpeg",
-            "png":  "image/png",
-            "tiff": "image/tiff",
-            "tif":  "image/tiff",
-            "gif":  "image/gif",
-            "webp": "image/webp",
-        }.get(fmt, "image/jpeg")
-    except Exception:
-        return "image/jpeg"
-
-
-def _preprocess_image(image_bytes: bytes) -> bytes:
-    """Enhance image quality for better OCR: upsample small images, convert to RGB."""
-    try:
-        img = Image.open(io.BytesIO(image_bytes))
-
-        # Convert to RGB (handles RGBA, palette, greyscale)
+        # Convert to RGB
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-
-        # Upsample if the image is too small — Gemini benefits from ≥1000px on longest side
+        # Upsample if too small
         w, h = img.size
         longest = max(w, h)
         if longest < 1500:
             scale = 1500 / longest
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-
-        # Re-encode as high-quality JPEG
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=92, optimize=True)
-        return buf.getvalue()
+        return buf.getvalue(), "image/jpeg"
     except Exception:
-        return image_bytes  # Fall back to original if preprocessing fails
+        return image_bytes, "image/jpeg"
 
 
 def extract_text_from_image(image_bytes: bytes) -> str:
-    """Send an image to the best available Gemini model and return transcribed text.
-
-    Tries models in preference order (2.5 Pro → 1.5 Pro → 2.0 Flash) so the
-    service works regardless of which preview models are allowlisted.
+    """Send an image to Claude claude-sonnet-4-5 and return the transcribed text.
 
     Args:
         image_bytes: Raw bytes of a JPG / PNG / TIF image.
@@ -116,27 +82,46 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         Transcribed plain text string.
 
     Raises:
-        RuntimeError: If all models fail.
+        RuntimeError: If the Anthropic API call fails.
     """
-    processed = _preprocess_image(image_bytes)
-    image_part = Part.from_data(data=processed, mime_type="image/jpeg")
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is not set. "
+            "Add it to your Cloud Run environment variables."
+        )
 
-    last_error = None
-    for model_name in GEMINI_MODELS:
-        try:
-            model = GenerativeModel(model_name)
-            response = model.generate_content(
-                [image_part, TRANSCRIPTION_PROMPT],
-                generation_config=GenerationConfig(
-                    temperature=0.0,
-                    max_output_tokens=8192,
-                ),
-            )
-            return response.text.strip()
-        except Exception as e:
-            # 404 = model not available in this project/region — try next
-            last_error = e
-            if "404" not in str(e) and "not found" not in str(e).lower():
-                break  # Non-availability error — don't retry other models
+    processed, media_type = _preprocess_image(image_bytes)
+    image_b64 = base64.standard_b64encode(processed).decode("utf-8")
 
-    raise RuntimeError(f"Gemini transcription failed: {last_error}") from last_error
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=4096,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": image_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": TRANSCRIPTION_PROMPT,
+                        },
+                    ],
+                }
+            ],
+        )
+        return message.content[0].text.strip()
+    except anthropic.AuthenticationError:
+        raise RuntimeError("Invalid ANTHROPIC_API_KEY — check your API key.")
+    except anthropic.RateLimitError:
+        raise RuntimeError("Anthropic rate limit reached — please try again shortly.")
+    except Exception as e:
+        raise RuntimeError(f"Claude transcription failed: {e}") from e

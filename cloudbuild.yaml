@@ -30,7 +30,7 @@ steps:
       - '--memory=1Gi'
       - '--cpu=1'
       - '--timeout=300'
-      - '--set-env-vars=GCP_PROJECT=historical-markup-tool-v2,GCP_LOCATION=us-central1'
+      - '--update-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest'
       - '--project=historical-markup-tool-v2'
       - '--quiet'
 

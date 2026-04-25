@@ -30,15 +30,12 @@ gcloud artifacts repositories create "$REPO" \
   && echo "  Created repo: $REPO" \
   || echo "  Repo already exists — continuing."
 
-# ── 3. Grant the default Compute SA the Vertex AI User role ────────────────
-echo ""
-echo "▸ Granting Vertex AI User role to Cloud Run service account..."
-PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
-SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:$SA" \
-  --role="roles/aiplatform.user" \
-  --quiet
+# ── 3. Check ANTHROPIC_API_KEY is set ─────────────────────────────────────
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  echo "ERROR: ANTHROPIC_API_KEY is not set."
+  echo "Run:  export ANTHROPIC_API_KEY=sk-ant-..."
+  exit 1
+fi
 
 # ── 4. Enable Cloud Build API ──────────────────────────────────────────────
 gcloud services enable cloudbuild.googleapis.com --project="$PROJECT_ID" --quiet
@@ -62,7 +59,7 @@ gcloud run deploy "$SERVICE" \
   --memory=1Gi \
   --cpu=1 \
   --timeout=300 \
-  --set-env-vars="GCP_PROJECT=$PROJECT_ID,GCP_LOCATION=$REGION" \
+  --set-env-vars="ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" \
   --project="$PROJECT_ID"
 
 # ── 8. Print the live URL ───────────────────────────────────────────────────

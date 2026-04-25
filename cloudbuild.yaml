@@ -1,0 +1,42 @@
+steps:
+  # Step 1: Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/historical-markup-tool-v2/hmt-repo/historical-markup-tool:$COMMIT_SHA'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/historical-markup-tool-v2/hmt-repo/historical-markup-tool:latest'
+      - '.'
+
+  # Step 2: Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'us-central1-docker.pkg.dev/historical-markup-tool-v2/hmt-repo/historical-markup-tool'
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'historical-markup-tool'
+      - '--image=us-central1-docker.pkg.dev/historical-markup-tool-v2/hmt-repo/historical-markup-tool:$COMMIT_SHA'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=1Gi'
+      - '--cpu=1'
+      - '--timeout=300'
+      - '--set-env-vars=GCP_PROJECT=historical-markup-tool-v2,GCP_LOCATION=us-central1'
+      - '--project=historical-markup-tool-v2'
+      - '--quiet'
+
+images:
+  - 'us-central1-docker.pkg.dev/historical-markup-tool-v2/hmt-repo/historical-markup-tool:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/historical-markup-tool-v2/hmt-repo/historical-markup-tool:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

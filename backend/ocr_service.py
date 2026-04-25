@@ -15,8 +15,14 @@ from vertexai.generative_models import GenerativeModel, Part, GenerationConfig
 GCP_PROJECT  = os.environ.get("GCP_PROJECT",  "historical-markup-tool-v2")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
 
-# Gemini 2.5 Pro — best available model for complex handwriting recognition
-GEMINI_MODEL = "gemini-2.5-pro-preview-05-06"
+# Model preference order — first available model wins
+# gemini-2.5-pro-preview-05-06 is best but requires project allowlist;
+# gemini-1.5-pro-002 is GA everywhere and excellent for handwriting
+GEMINI_MODELS = [
+    "gemini-2.5-pro-preview-05-06",
+    "gemini-1.5-pro-002",
+    "gemini-2.0-flash-001",
+]
 
 # Initialise once at import time
 vertexai.init(project=GCP_PROJECT, location=GCP_LOCATION)
@@ -100,7 +106,10 @@ def _preprocess_image(image_bytes: bytes) -> bytes:
 
 
 def extract_text_from_image(image_bytes: bytes) -> str:
-    """Send an image to Gemini 2.5 Pro and return the transcribed text.
+    """Send an image to the best available Gemini model and return transcribed text.
+
+    Tries models in preference order (2.5 Pro → 1.5 Pro → 2.0 Flash) so the
+    service works regardless of which preview models are allowlisted.
 
     Args:
         image_bytes: Raw bytes of a JPG / PNG / TIF image.
@@ -109,20 +118,27 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         Transcribed plain text string.
 
     Raises:
-        RuntimeError: If the Vertex AI call fails.
+        RuntimeError: If all models fail.
     """
     processed = _preprocess_image(image_bytes)
     image_part = Part.from_data(data=processed, mime_type="image/jpeg")
 
-    try:
-        model = GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
-            [image_part, TRANSCRIPTION_PROMPT],
-            generation_config=GenerationConfig(
-                temperature=0.0,          # Zero temperature = most deterministic
-                max_output_tokens=8192,   # 2.5 Pro supports long outputs
-            ),
-        )
-        return response.text.strip()
-    except Exception as e:
-        raise RuntimeError(f"Gemini transcription failed: {e}") from e
+    last_error = None
+    for model_name in GEMINI_MODELS:
+        try:
+            model = GenerativeModel(model_name)
+            response = model.generate_content(
+                [image_part, TRANSCRIPTION_PROMPT],
+                generation_config=GenerationConfig(
+                    temperature=0.0,
+                    max_output_tokens=8192,
+                ),
+            )
+            return response.text.strip()
+        except Exception as e:
+            # 404 = model not available in this project/region — try next
+            last_error = e
+            if "404" not in str(e) and "not found" not in str(e).lower():
+                break  # Non-availability error — don't retry other models
+
+    raise RuntimeError(f"Gemini transcription failed: {last_error}") from last_error
